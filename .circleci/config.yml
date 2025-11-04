@@ -2,30 +2,66 @@
 # See: https://circleci.com/docs/reference/configuration-reference
 version: 2.1
 
-# Define a job to be invoked later in a workflow.
-# See: https://circleci.com/docs/guides/orchestrate/jobs-steps/#jobs-overview & https://circleci.com/docs/reference/configuration-reference/#jobs
 jobs:
-  say-hello:
-    # Specify the execution environment. You can specify an image from Docker Hub or use one of our convenience images from CircleCI's Developer Hub.
-    # See: https://circleci.com/docs/guides/execution-managed/executor-intro/ & https://circleci.com/docs/reference/configuration-reference/#executor-job
+  build_and_deploy:
     docker:
-      # Specify the version you desire here
-      # See: https://circleci.com/developer/images/image/cimg/base
-      - image: cimg/base:current
-
-    # Add steps to the job
-    # See: https://circleci.com/docs/guides/orchestrate/jobs-steps/#steps-overview & https://circleci.com/docs/reference/configuration-reference/#steps
+      - image: cimg/base:stable
+    environment:
+      # Ensure non-interactive npm and CRA tests
+      CI: "true"
     steps:
-      # Checkout the code as the first step.
       - checkout
-      - run:
-          name: "Say hello"
-          command: "echo Hello, World!"
 
-# Orchestrate jobs using workflows
-# See: https://circleci.com/docs/guides/orchestrate/workflows/ & https://circleci.com/docs/reference/configuration-reference/#workflows
+      # Enable Docker (DinD) for building and pushing images
+      - setup_remote_docker:
+          version: 20.10.18
+
+      # Optional: Speed up Docker builds with a simple layer cache
+      - restore_cache:
+          keys:
+            - v1-docker-{{ .Branch }}-{{ checksum "client/package.json" }}-{{ checksum "server/package.json" }}-{{ checksum "worker/package.json" }}
+            - v1-docker-
+
+      # Build a test image for the React client and run tests
+      - run:
+          name: Build client test image
+          command: |
+            docker build -t ${DOCKERHUB_USERNAME}/multi-client-test -f client/Dockerfile.dev ./client
+      - run:
+          name: Run client tests
+          command: |
+            docker run --rm -e CI=true ${DOCKERHUB_USERNAME}/multi-client-test npm test
+
+      # Build production images for all services
+      - run:
+          name: Build production images
+          command: |
+            docker build -t ${DOCKERHUB_USERNAME}/multi-client -f client/Dockerfile ./client
+            docker build -t ${DOCKERHUB_USERNAME}/multi-nginx -f nginx/Dockerfile ./nginx
+            docker build -t ${DOCKERHUB_USERNAME}/multi-server -f server/Dockerfile ./server
+            docker build -t ${DOCKERHUB_USERNAME}/multi-worker -f worker/Dockerfile ./worker
+
+      # Login to Docker Hub
+      - run:
+          name: Docker Hub login
+          command: |
+            echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+      # Push images to Docker Hub
+      - run:
+          name: Push images
+          command: |
+            docker push ${DOCKERHUB_USERNAME}/multi-client
+            docker push ${DOCKERHUB_USERNAME}/multi-nginx
+            docker push ${DOCKERHUB_USERNAME}/multi-server
+            docker push ${DOCKERHUB_USERNAME}/multi-worker
+
+      - save_cache:
+          key: v1-docker-{{ .Branch }}-{{ checksum "client/package.json" }}-{{ checksum "server/package.json" }}-{{ checksum "worker/package.json" }}
+          paths:
+            - /var/lib/docker
+
 workflows:
-  say-hello-workflow: # This is the name of the workflow, feel free to change it to better match your workflow.
-    # Inside the workflow, you define the jobs you want to run.
+  build_test_and_push:
     jobs:
-      - say-hello
+      - build_and_deploy
