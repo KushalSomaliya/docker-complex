@@ -13,8 +13,7 @@ jobs:
       - checkout
 
       # Enable Docker (DinD) for building and pushing images
-      - setup_remote_docker:
-          version: 20.10.18
+      - setup_remote_docker
 
       # Optional: Speed up Docker builds with a simple layer cache
       - restore_cache:
