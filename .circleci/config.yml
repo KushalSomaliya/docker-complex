@@ -1,0 +1,67 @@
+# Use the latest 2.1 version of CircleCI pipeline process engine.
+# See: https://circleci.com/docs/reference/configuration-reference
+version: 2.1
+
+jobs:
+  build_and_deploy:
+    docker:
+      - image: cimg/base:stable
+    environment:
+      # Ensure non-interactive npm and CRA tests
+      CI: "true"
+    steps:
+      - checkout
+
+      # Enable Docker (DinD) for building and pushing images
+      - setup_remote_docker:
+          version: 20.10.18
+
+      # Optional: Speed up Docker builds with a simple layer cache
+      - restore_cache:
+          keys:
+            - v1-docker-{{ .Branch }}-{{ checksum "client/package.json" }}-{{ checksum "server/package.json" }}-{{ checksum "worker/package.json" }}
+            - v1-docker-
+
+      # Build a test image for the React client and run tests
+      - run:
+          name: Build client test image
+          command: |
+            docker build -t ${DOCKERHUB_USERNAME}/multi-client-test -f client/Dockerfile.dev ./client
+      - run:
+          name: Run client tests
+          command: |
+            docker run --rm -e CI=true ${DOCKERHUB_USERNAME}/multi-client-test npm test
+
+      # Build production images for all services
+      - run:
+          name: Build production images
+          command: |
+            docker build -t ${DOCKERHUB_USERNAME}/multi-client -f client/Dockerfile ./client
+            docker build -t ${DOCKERHUB_USERNAME}/multi-nginx -f nginx/Dockerfile ./nginx
+            docker build -t ${DOCKERHUB_USERNAME}/multi-server -f server/Dockerfile ./server
+            docker build -t ${DOCKERHUB_USERNAME}/multi-worker -f worker/Dockerfile ./worker
+
+      # Login to Docker Hub
+      - run:
+          name: Docker Hub login
+          command: |
+            echo "${DOCKERHUB_PASSWORD}" | docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+
+      # Push images to Docker Hub
+      - run:
+          name: Push images
+          command: |
+            docker push ${DOCKERHUB_USERNAME}/multi-client
+            docker push ${DOCKERHUB_USERNAME}/multi-nginx
+            docker push ${DOCKERHUB_USERNAME}/multi-server
+            docker push ${DOCKERHUB_USERNAME}/multi-worker
+
+      - save_cache:
+          key: v1-docker-{{ .Branch }}-{{ checksum "client/package.json" }}-{{ checksum "server/package.json" }}-{{ checksum "worker/package.json" }}
+          paths:
+            - /var/lib/docker
+
+workflows:
+  build_test_and_push:
+    jobs:
+      - build_and_deploy
